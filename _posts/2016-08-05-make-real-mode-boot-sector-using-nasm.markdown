@@ -23,16 +23,17 @@ boot sector是一个16位实模式程序，gas不支持编译生成该模式的�
 
 {% highlight assembly %}
         BITS 16                         ; 16 bits real mode                
-        global _start                                                      
+        DATASEG equ 0x07C0              ; BIOS load this to 0x7C00,
+                                        ; so set DS=0x07C0 to make label msg1 works
+        global _start
 
-_start: 
+_start:
         cli                             ; disable interrupt
-	jmp word 0x07c0:.go		; jump to 0x07c0 segment
 .go:
-        mov ax, cs                      ; get current code segment         
-        mov ds, ax                                                         
-        mov ss, ax
-        mov sp, 0xFF                                                       
+        mov ax, DATASEG                 ; get current code segment
+        mov ds, ax
+        mov ss, ax                      ; set stack to 0x07C0:0xFFFF
+        mov sp, 0xFFFF
         
         mov si, msg1                                                       
         call print                                                         
@@ -61,7 +62,7 @@ msg1:
         DW 0xAA55
 {% endhighlight %}
 
-以上代码设置DS、SS和代码段重叠，堆栈设置到0x7CFF。然后调用print子程序通过BIOS中断0x10输出字符串 `Loading system ...` 。最后一个字设置成0xAA55，表示本扇区是有效的引导扇区，中间全部用0填充。
+以上代码设置DS、SS和代码段重叠，堆栈设置到0x7CFF。然后调用print子程序通过BIOS中断0x10输出字符串 `Loading system ...` 。最后一个字设置成0xAA55，表示本扇区是有效的引导扇区，中间全部用0填充，这样这段程序刚好填满启动扇区。关于`INT 0x10`的功能以及参数说明，参考[这篇wiki][int-10h]。
 
 ## 编译链接
 
@@ -93,7 +94,7 @@ boot.elf: boot.o
 
 ## 使用gdb和qemu调试
 
-boot sector必须运行在实模式下，不能直接在linux系统内启动。我们可以通过虚拟机来模拟运行。推荐使用qemu，它支持gdb_stub，可以远程调试。
+boot sector必须运行在实模式下，不能直接在linux系统内启动。我们可以通过虚拟机来模拟运行。推荐使用qemu，它内置gdb stub支持，可以远程调试。
 
 首先，把boot.img作为hda启动qemu，-s参数是监听1234端口等待gdb连接，-S参数是默认中断执行，等待continue命令继续。
 
@@ -104,9 +105,12 @@ qemu-system-i386 -hda boot.img -s -S&
 然后，使用gdb连接qemu，进行调试。 `set architecture i8086` 使gdb能够正确反汇编8086指令，详细说明参见[这篇stackoverflow][debug-16-bit-assembly]。
 
 {% highlight bash %}
-gdb boot.elf -ex 'target remote :1234' -ex 'set architecture i8086' -ex 'layout asm' -ex 'layout regs' -ex 'b _start'
+gdb boot.elf -ex 'target remote :1234' -ex 'set architecture i8086'\
+ -ex 'layout asm' -ex 'layout regs'\
+ -ex 'b _start'
 {% endhighlight %}
 
+[int-10h]:https://en.wikipedia.org/wiki/INT_10H
 [relocation-truncated]:http://stackoverflow.com/questions/34995239/nasm-ld-relocation-truncated-to-fit-r-386-16
 [debug-16-bit-assembly]:http://stackoverflow.com/questions/32955887/how-to-disassemble-16-bit-x86-boot-sector-code-in-gdb-with-x-i-pc-it-gets-tr
 
