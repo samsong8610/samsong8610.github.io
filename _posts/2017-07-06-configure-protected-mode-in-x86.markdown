@@ -1,8 +1,8 @@
 ---
 layout: post
-title:  "x86平台配置保护模式"
+title:  "x86平台启用保护模式"
 date:   2017-07-06
-categories: assembly kernel protected-mode
+categories: assembly protected-mode
 ---
 
 ## 分段segmentation
@@ -24,6 +24,10 @@ categories: assembly kernel protected-mode
 全局描述符表的起始线性地址和限长由GDTR寄存器保存。局部描述符表是需要在全局描述符表中作为一个段描述符来定义的，段选择符由LDTR寄存器保存。两个寄存器分别使用LGDT/SGDT和LLDT/SLDT来加载、保存。
 
 ![实模式和保护模式寻址方式比较]({{site.url}}/assets/real-mode-vs-protected-mode.png)
+
+图片来源：《Linux内核完全注释》
+
+这张图对比了两种模式下寻址方式的差异，可以看出保护模式的寻址处理要复杂不少。
 
 ## 保护
 
@@ -51,6 +55,95 @@ categories: assembly kernel protected-mode
 
 为了保持向后兼容，处理器重启后会自动进入实地址模式，需要程序主动切换进入保护模式。配置保护模式就是准备好它需要的数据结构，然后启用CR0的bit0 PE就可以了。
 
-基本的保护模式数据结构就是定义不同限长、不同用途、不同访问权限的段。在这个示例中定义了两个段，一个代码段，一个数据段，但是这两个段是重叠的。为了段内寻址简单，两个段的基地址都设置在0x0处。
+基本的保护模式数据结构就是定义不同限长、不同用途、不同访问权限的段。在这个示例中定义了两个段，一个代码段，一个数据段，但是这两个段是重叠的。为了段内寻址简单，两个段的基地址都设置在0x0处，长度2M。
 
-TODO: 示例不同特权级程序
+进入保护模式后，BIOS的中断服务就失效了，要向终端输出字符串只能直接向显存按照格式要求写入要输出的字符串。
+
+```nasm
+;;
+;; Load a simple kernel from disk and switch into protected mode
+;; The kernel size must be less than a sector, 512 bytes.
+;;
+
+    bits 16             ; bootsect is 16 bits code
+    org 0x7c00          ; bios jmp here to run application
+
+welcome:
+    mov ah, 0x13        ; write string
+    mov al, 0x01        ; string only contains character, update cursor
+    mov bh, 0           ; page number
+    mov bl, 0x07        ; format, lightgrey font on black background
+    mov cx, [welcome_str_len] ; string length
+    mov dx, 0           ; start from (0,0)
+    mov bp, welcome_str ; string to write
+    int 0x10
+
+enable_a20:
+    mov ax, 0x2401
+    int 0x15
+
+switch_to_protected_mode:
+    cli                 ; disable interrupts
+    lgdt [gdtr_value]   ; load gdt
+    lidt [idtr_value]   ; load idt
+    mov eax, cr0        ; enable PE in CR0:0
+    or eax, 0x0001
+    mov cr0, eax
+    jmp 0x08:start      ; goto the new segment at once after enable PE
+
+start:
+    bits 32             ; now we can use 32 bits code
+    ; setup data segment
+    xor eax, eax
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    ; setup stack
+    mov ss, ax
+    mov esp, 0x1fffff
+
+    ; say hello from kernel, BIOS service is gone!
+    mov esi, hello_kernel_str
+    mov edi, 0xb8000
+_print:
+    mov al, [esi]
+    cmp al, 0
+    jz endless
+    mov ah, 0x9c            ; char format, bg:blue fg:red highlight
+    mov [edi], ax
+    add edi, 2
+    inc esi
+    jmp _print
+
+endless:
+    jmp endless
+
+    align 8
+gdt_start:
+    dq 0                    ; null descriptor
+    dq 0x00c09a0000000200   ; kernel code segment, base 0x0, limit 0x200*4K=2M, DPL=0
+    dq 0x00c0920000000200   ; kernel data segment, base 0x0, limit 0x200*4K=2M, DPL=0
+gdt_end:
+
+gdtr_value:
+    dw gdt_start - gdt_end - 1  ; base+limit is the address of the LAST byte, so minus 1
+    dd gdt_start
+
+; Ignore IDT at all
+idtr_value:
+    dw 0
+    dd 0
+
+welcome_str:
+    db "Welcome to use protected-mode demo.", 13, 10
+welcome_str_len:
+    dw welcome_str_len - welcome_str
+hello_kernel_str:
+    db "Hello, kernel!", 0
+
+    times 510 - ($ - $$) db 0   ; fill the rest of the sector with 0
+    dw 0xAA55                   ; boot signature
+```
+代码编译运行方法参见[Makefile](http://github.com/samsong8610/asm-notes/blob/master/protected-mode/Makefile)。
