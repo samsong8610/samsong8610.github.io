@@ -17,4 +17,3 @@ github_username:  samsong8610
 
 # Build settings
 markdown: kramdown
-permalink: /blog/:year/:month/:day/:title
